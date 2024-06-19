@@ -1,0 +1,249 @@
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+from numpy.linalg import norm as LA
+from sklearn import preprocessing
+from termcolor import colored
+
+# PARAMETERS
+np.random.seed(3)
+event_a1_measurement_gap = -125  # dBm
+event_a2_measurement_gap = -130  # dBm
+RSRP_5G_min = -95  # minimum feasible communication in 5G
+f_mmWave = 28e9  # 28 GHz
+c = 3e8  # speed of light in m/s
+NRB = 100
+r = 350  # in meters
+lamb = 2e-4  # rate for PPP intensity parameter
+r_training = 0.7
+max_sim_time = 100  # in milliseconds
+k = 5  # 5-fold cross validation
+nodes = [50, 100, 150, 200]
+n_rounds = 100
+
+# Path loss models
+def cost231(distance, f=2.1e3, h_R=1.5, h_B=20):
+    C = 3
+    a = (1.1 * np.log10(f) - 0.7) * h_R - (1.56 * np.log10(f) - 0.8)
+    L = []
+    for d in distance:
+        L.append(46.3 + 33.9 * np.log10(f) + 13.82 * np.log10(h_B) - a + (44.9 - 6.55 * np.log10(h_B)) * np.log10(d) + C)
+    return L
+
+def pathloss_5g(distance, f=28e3, h_R=1.5, h_B=23):
+    alpha = 118.77
+    beta = 0.12
+    sigma_sf = 5.78
+    L = []
+    for d in distance:
+        chi_sigma = np.random.normal(0, sigma_sf)
+        L.append(alpha + beta * np.log10(d * 1000) + chi_sigma)
+    return L
+
+# Plotting network
+def plot_network(u_1, u_2, plotting=False):
+    n = len(u_1)
+    radii = np.zeros(n)
+    angle = np.zeros(n)
+    for i in range(n):
+        radii[i] = r * (np.sqrt(u_1[i]))
+        angle[i] = 2 * np.pi * u_2[i]
+    x = np.zeros(n)
+    y = np.zeros(n)
+
+    for i in range(n):
+        x[i] = radii[i] * np.cos(angle[i])
+        y[i] = radii[i] * np.sin(angle[i])
+
+    return ([x, y])
+
+# Distance computation
+def compute_distance(X, Y):
+    dist = LA.norm((X, Y), axis=0)
+    return dist / 1000
+
+# Power computation
+def compute_power(d, tx=46, g=17, loss=3, f=2100):
+    path_loss = cost231(d, f, 1.5, 20)
+    n = len(path_loss)
+    return np.ones(n) * (tx + g - loss - 10 * np.log10(NRB * 12)) - path_loss
+
+def compute_power_5g(d, tx=46, g=24, loss=3, f=(f_mmWave / 1e6)):
+    NRB = 200
+    path_loss = pathloss_5g(d, f, 1.5, 20)
+    n = len(path_loss)
+    return np.ones(n) * (tx + g - loss - 10 * np.log10(NRB * 12)) - path_loss
+
+# Interference computation
+def compute_interference():
+    return np.random.normal(-90, 5, n)
+
+# SINR computation
+def compute_sinr(received_power, interference):
+    noise_figure = 5  # dB
+    thermal_noise = -174 + 10 * np.log10(NRB * 12) + noise_figure  # dBm
+    sinr = received_power - (thermal_noise + interference)
+    return sinr
+
+# Spectral efficiency computation
+def compute_spectral_efficiency(sinr):
+    spectral_efficiency = np.log2(1 + 10 ** (sinr / 10))
+    return spectral_efficiency
+
+# Capacity computation
+def compute_capacity(spectral_efficiency, bandwidth=100e6):
+    capacity = spectral_efficiency * bandwidth / 1e6  # in Mbps
+    return capacity
+
+def simulation_DATA(node_count, round_num):
+    global n
+    lamb = 2e-4  # rate for PPP intensity parameter
+    Lambda = lamb * np.pi * r ** 2
+    n = node_count
+
+    # Generate user positions
+    u_1 = np.random.uniform(0.0, 1.0, n)
+    u_2 = np.random.uniform(0.0, 1.0, n)
+    ([x0, y0]) = plot_network(u_1, u_2, plotting=True)
+
+    # Create dataframe
+    simulation_data = pd.DataFrame({'X': x0, 'Y': y0})
+    simulation_data['UE#'] = simulation_data.index.values
+    simulation_data['Iteration'] = 0
+    simulation_data['Distance'] = compute_distance(x0, y0)
+    simulation_data['RSRP_LTE'] = compute_power(d=simulation_data['Distance'], tx=46, g=17, loss=3, f=2100)
+    simulation_data['RSRP_5G'] = compute_power_5g(d=simulation_data['Distance'], tx=46, g=24, loss=3, f=(f_mmWave / 1e6))
+    simulation_data['Gap_Closed'] = (simulation_data['RSRP_LTE'] >= event_a1_measurement_gap)
+    simulation_data['Gap_Open'] = (simulation_data['RSRP_LTE'] <= event_a2_measurement_gap)
+    simulation_data['HO_executed'] = (simulation_data['Gap_Open'] & (simulation_data['RSRP_5G'] >= RSRP_5G_min))
+
+    average_UE_speed = 1000. * simulation_data['Distance'].mean() / max_sim_time
+    T_coherence = np.ceil(average_UE_speed / c * f_mmWave)
+
+    global N_training
+    N_training = int(min(T_coherence, r_training * max_sim_time))
+
+    # Additional metrics computation
+    simulation_data['Interference'] = compute_interference()
+    simulation_data['SINR'] = compute_sinr(simulation_data['RSRP_5G'], simulation_data['Interference'])
+    simulation_data['Spectral_Efficiency'] = compute_spectral_efficiency(simulation_data['SINR'])
+    simulation_data['Capacity_Mbps'] = compute_capacity(simulation_data['Spectral_Efficiency'])
+    simulation_data['Capacity_Mbps_km2'] = simulation_data['Capacity_Mbps'] / (np.pi * r ** 2 / 1e6)
+
+    # Compute path loss for LTE and 5G
+    simulation_data['Path_Loss_LTE'] = cost231(simulation_data['Distance'], f=2100)
+    simulation_data['Path_Loss_5G'] = pathloss_5g(simulation_data['Distance'], f=28e3)
+
+    # Now create a simulation time
+    for simulation_time in 1 + np.arange(max_sim_time):
+        # Now move the users
+        simulation_n = pd.DataFrame()
+
+        u_1 = np.random.uniform(0.0, 1.0, n)  # generate n uniformly distributed points
+        u_2 = np.random.uniform(0.0, 1.0, n)  # generate another n uniformly distributed points
+
+        ([x, y]) = plot_network(u_1, u_2)
+
+        # compute the SINR and RSRP of all UEs
+        simulation_n = pd.DataFrame({'X': x,
+                                     'Y': y})
+        simulation_n['UE#'] = simulation_n.index.values
+        simulation_n['Iteration'] = simulation_time
+        simulation_n['Distance'] = compute_distance(x, y)
+        simulation_n['RSRP_LTE'] = compute_power(d=simulation_n['Distance'])
+        simulation_n['RSRP_5G'] = compute_power_5g(d=simulation_n['Distance'])
+
+        # Now based on the received power, handover yes or no?
+        simulation_n['Gap_Closed'] = (simulation_n['RSRP_LTE'] >= event_a1_measurement_gap)
+        simulation_n['Gap_Open'] = (simulation_n['RSRP_LTE'] <= event_a2_measurement_gap)  # this is a handover request (almost)
+        simulation_n['HO_executed'] = (simulation_n['Gap_Open'] & (simulation_n['RSRP_5G'] >= RSRP_5G_min))
+
+        # new parameters
+        simulation_n['Interference'] = compute_interference()
+        simulation_n['SINR'] = compute_sinr(simulation_n['RSRP_5G'], simulation_n['Interference'])
+
+        simulation_n['Spectral_Efficiency'] = compute_spectral_efficiency(simulation_n['SINR'])
+        simulation_n['Capacity_Mbps'] = compute_capacity(simulation_n['Spectral_Efficiency'])
+        simulation_n['Capacity_Mbps_km2'] = simulation_n['Capacity_Mbps'] / (np.pi * r ** 2 / 1e6)
+
+        # Compute path loss for LTE and 5G
+        simulation_n['Path_Loss_LTE'] = cost231(simulation_n['Distance'], f=2100)
+        simulation_n['Path_Loss_5G'] = pathloss_5g(simulation_n['Distance'], f=28e3)
+
+        # Just append this record
+        simulation_data = simulation_data._append(simulation_n, ignore_index=True)
+
+        # Save to the file
+        label_encoder = preprocessing.LabelEncoder()
+        simulation_data['Gap_Open'] = label_encoder.fit_transform(simulation_data['Gap_Open'])
+        simulation_data['Gap_Closed'] = label_encoder.fit_transform(simulation_data['Gap_Closed'])
+        simulation_data['Label'] = label_encoder.fit_transform(simulation_data['HO_executed'])
+        simulation_data = simulation_data.drop(['HO_executed'], axis=1)
+
+        file_name = f'npy_files/Main_file_sim_out_nodes_{node_count}_round_{round_num}.csv'
+        simulation_data.to_csv(file_name, index=False)
+        print(colored(f" --- Data saved to {file_name} Successfully ----...", on_color='on_white', color='green'))
+
+
+def predict_handover(UE_i_RSRP_LTE, UE_i_RSRP_5G, UE_i_HO, i):
+    seed = 3
+    dataset = pd.DataFrame({'RSRP_LTE': UE_i_RSRP_LTE.values,
+                            'RSRP_5G': UE_i_RSRP_5G.values,
+                            'Executed': UE_i_HO.values})
+    # Convert flag to 1 and 0 to become a supervised label.
+    dataset['Executed'] = dataset['Executed'].astype(int)
+    training = dataset.iloc[:N_training, :]
+    test = dataset.iloc[N_training:, :]
+
+    X_train = training.drop('Executed', axis=1)
+    y_train = training['Executed']
+    X_test = test.drop('Executed', axis=1)
+    y_test = test['Executed']
+
+    classifier = xgb.XGBClassifier(seed=seed, learning_rate=0.05, n_estimators=500)
+    clf = classifier.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+    return y_test, y_pred
+
+# Running the simulation and analysis
+for node_count in nodes:
+    for round_num in range(n_rounds):
+        simulation_DATA(node_count, round_num)
+        data = pd.read_csv(f'npy_files/Main_file_sim_out_nodes_{node_count}_round_{round_num}.csv')
+
+        simulation_result = pd.DataFrame()
+        for i in np.arange(node_count):
+            UE_i = data[data['UE#'] == i]
+            UE_i_RSRP_LTE = UE_i['RSRP_LTE']
+            UE_i_RSRP_5G = UE_i['RSRP_5G']
+            UE_i_HO_Executed = UE_i['Label']
+            UE_i_Gap_Open = UE_i['Gap_Open']
+
+            # Compute handover success rate
+            UE_i_HO_Succ = UE_i_HO_Executed.sum() / UE_i_Gap_Open.sum() if UE_i_Gap_Open.sum() > 0 else 0
+
+            # Prediction from the XGboost classifier
+            true, pred = predict_handover(UE_i_RSRP_LTE, UE_i_RSRP_5G, UE_i_HO_Executed, i)
+
+            # Additional metrics
+            HO_success_rate = (true & (true == pred)).sum() / len(true) if len(true) > 0 else 0
+            HO_failure_rate = (true & (true != pred)).sum() / len(true) if len(true) > 0 else 0
+            HO_frequency_rate = UE_i_HO_Executed.sum() / max_sim_time
+            HO_detection_time = N_training  # Simplified for this example
+
+            result_row = {'UE#': i, 'HO_Success_Rate': HO_success_rate, 'HO_Failure_Rate': HO_failure_rate,
+                          'HO_Frequency_Rate': HO_frequency_rate, 'HO_Detection_Time': HO_detection_time}
+            simulation_result = simulation_result._append(result_row, ignore_index=True)
+
+        result_file_name = f'npy_files/Simulation_result_nodes_{node_count}_round_{round_num}.csv'
+        simulation_result.to_csv(result_file_name, index=False)
+        print(colored(f" --- Simulation results saved to {result_file_name} Successfully ----...",
+                      on_color='on_white', color='blue'))
+
+
+
+#
+# Handover Success Rate: Measures how often handovers are successfully predicted and executed.
+# Handover Failure Rate: Measures the rate of incorrect handover predictions.
+# Handover Frequency Rate: Measures how often handovers are happening over time.
+# Handover Detection Time: Estimates the time required to detect and execute a handover based on UE speed and channel conditions.
