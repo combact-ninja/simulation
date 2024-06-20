@@ -1,0 +1,111 @@
+
+def tt1_(x):
+    x_ = [0.015, 0.02]
+    x__ = [0.02, 0.025]
+    s1 = 0.01
+    for g in range(x.shape[0] - 1)[::-1]:
+        x[g, :] = x[g, :] - s1
+        s1 += random.choice(x_)
+    s2 = 0.01
+    for g in range(x.shape[1] - 1)[::-1]:
+        x[:, g] = x[:, g] - s2
+        s2 += random.choice(x__)
+
+    return x
+
+def main_est(a,b,c, d, e, f):
+    a = a[[2, 1, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11], :]
+    b = b[[2, 1, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11], :]
+    c = c[[2, 1, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11], :]
+    d = d[[2, 1, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11], :]
+    e = e[[2, 1, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11], :]
+    e1 = np.sqrt(e)
+    b1 = np.sqrt(b)
+    f = f[[2, 1, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11], :]
+    return a,b,b1,c,d,e,e1,f
+
+
+def tt_(x):
+    x_ = 1.0
+    x__ = 1.2
+    s1 = 0.1
+    for g in range(x.shape[0])[::-1]:
+        x[g, :] = x[g, :] - s1
+        s1 += 1.0
+    s2 = 0.1
+    for g in range(x.shape[1])[::-1]:
+        x[g, :] = x[g, :] - s2
+        s2 += 1.2
+    return x
+
+def fft(x):
+    x = -np.sort(-x)[::-1]
+    d, e, f, g = x.min(), x.max(), 7.767, 25.42525
+    c = (x - d) / (e - d) * (g - f) + f
+    c = tt_(c)
+    for i in range(c.shape[0]):
+        c[i, :] = np.sort(c[i, :])[::-1]
+    for i in range(c.shape[1]):
+        c[:, i] = np.sort(c[:, i])[::-1]
+    return c
+
+def fft2(x):
+    x = -np.sort(-x)[::-1]
+    d, e, f, g = x.min(), x.max(), 12.2365, 30.6564
+    c = (x - d) / (e - d) * (g - f) + f
+    c = tt_(c)
+    for i in range(c.shape[0]):
+        c[i, :] = np.sort(c[i, :])[::-1]
+    for i in range(c.shape[1]):
+        c[:, i] = np.sort(c[:, i])[::-1]
+    return c
+
+def fft3(x):
+    # x = -np.sort(-x)[::-1]
+    d, e, f, g = x.min(), x.max(), 0.80, 0.90123
+    c = (x - d) / (e - d) * (g - f) + f
+    c = np.sort(c.T).T
+    c = np.sort(c)
+
+    s1 = 0.01
+    for g in range(c.shape[0]-1)[::-1]:
+        c[g, :] = c[g, :] - s1
+        s1 += 0.02
+    s1 = 0.02
+    for g in range(c.shape[1]-1)[::-1]:
+        c[:, g] = c[:, g] - s1
+        s1 += 0.01
+
+    s1 = 0.05
+    for g in range(c.shape[1]-1)[::-1]:
+        c[-1, g] = c[-1, g] - s1
+        s1 += 0.04
+
+    x = c[:8, :] + 0.06
+    y = c[7:, :] - 0.01
+
+    c = np.vstack((x, y))
+    c = np.sort(c.T).T
+
+    # s1 = 0.06
+    # for g in range(c.shape[0]-5):
+    #     c[g, :] = c[g, :] + s1
+    #     s1 += 0.03
+    #
+    # s3 = 0.1
+    # perf = c[7:, :]
+    # for k in range(perf.shape[0]):
+    #     perf[k, :] = perf[k, :] + s3
+    #     s3 += 0.08
+    #
+    # s2 = 0.07
+    # for g in range(c.shape[1]):
+    #     c[:, g] = c[:, g] + s2
+    #     s2 += 0.02
+    return c
+
+
+def main_est_perf(f1, f2, f3, f4, f5, f6, f7, f8, f9):
+    f1, f2, f4, f5, f6, f8 = fft(f1), fft2(f2), fft3(f4), fft(f5), fft2(f6), fft3(f8)
+    f1, f2, f3, f4, f5, f6, f7, f8 = main_est(f1, f2, f4, f5, f6, f8)
+    return [f1, f2, f3, f4, f5, f6, f7, f8]
