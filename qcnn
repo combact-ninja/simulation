@@ -1,0 +1,149 @@
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+torch.manual_seed(0)
+
+n_class = 3
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv = nn.Conv2d(1, 4, (2, 1), stride=(2, 1))
+        self.fc1 = nn.Linear(4*10, 6)
+        self.fc2 = nn.Linear(6, n_class)
+
+    def forward(self, X):
+        bs = X.shape[0]
+        X = X.view(bs, 1, 21, 1)
+        X = self.conv(X)
+        X = F.relu(X)
+        X = X.view(bs, -1)
+        X = self.fc1(X)
+        X = F.relu(X)
+        X = self.fc2(X)
+        return X
+
+
+from torch.utils.data import Dataset
+
+class ArrayDataset(Dataset):
+    def __init__(self, features, labels):
+        self.features = torch.tensor(features, dtype=torch.float32)
+        self.labels = torch.tensor(labels, dtype=torch.long)
+
+    def __len__(self):
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        return {
+            'feature': self.features[idx],
+            'label': self.labels[idx]
+        }
+
+
+import torch
+import torch.nn as nn
+from torch.utils.data import Subset, DataLoader
+from sklearn.model_selection import train_test_split
+
+# Example features and labels arrays
+features = np.random.rand(1000, 21, 1, 1)  # Replace with your actual data
+labels = np.random.randint(0, 2, 1000)    # Replace with your actual data
+
+# Assume features and labels are already loaded as NumPy arrays
+dataset = ArrayDataset(features, labels)
+
+# Load the device
+device = torch.device('cpu')
+
+# Define model
+net = Net()
+net.to(device)
+
+# Loss function and optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adagrad(net.parameters(), lr=0.5)
+
+# Training parameters
+epochs = 10
+bs = 30
+
+# Split dataset into training and validation sets
+train_id, val_id = train_test_split(list(range(len(dataset))), test_size=0.2, random_state=0)
+train_set = Subset(dataset, train_id)
+val_set = Subset(dataset, val_id)
+
+# Create data loaders
+train_loader = DataLoader(train_set, batch_size=bs, shuffle=True)
+val_loader = DataLoader(val_set, batch_size=bs, shuffle=False)
+
+
+# Training function
+def train_network(net, train_loader, val_loader, device, epochs, optimizer, criterion):
+    for epoch in range(epochs):
+        net.train()
+        for batch in train_loader:
+            features = batch['feature'].to(device)
+            labels = batch['label'].to(device)
+            optimizer.zero_grad()
+            outputs = net(features)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+        print(f'Epoch {epoch + 1}/{epochs}, Loss: {loss.item():.4f}')
+
+    print("Training complete.")
+
+
+# Train the network
+train_network(net=net, train_loader=train_loader, val_loader=val_loader, device=device,
+              epochs=epochs, optimizer=optimizer, criterion=criterion)
+
+# Save the trained model
+torch.save(net.state_dict(), 'trained_model.pth')
+
+
+import torch
+from torch.utils.data import DataLoader
+
+# Assume test_features and test_labels are already loaded as NumPy arrays
+test_features = np.random.rand(200, 21, 1, 1)  # Replace with your actual test data
+test_labels = np.random.randint(0, 3, 200)    # Replace with your actual test data
+
+# Create the test dataset and DataLoader
+test_dataset = ArrayDataset(test_features, test_labels)
+test_loader = DataLoader(test_dataset, batch_size=30, shuffle=False)
+
+# Load the device
+device = torch.device('cpu')
+
+# Load the trained model
+net = Net()
+net.load_state_dict(torch.load('trained_model.pth'))
+net.to(device)
+net.eval()
+
+# Function to make predictions
+def predict(model, dataloader, device):
+    model.eval()
+    all_preds = []
+    with torch.no_grad():
+        for batch in dataloader:
+            inputs = batch['feature'].to(device)
+            outputs = model(inputs)
+            _, preds = torch.max(outputs, 1)
+            all_preds.append(preds.cpu().numpy())
+    return np.concatenate(all_preds)
+
+# Make predictions on test data
+test_predictions = predict(net, test_loader, device)
+
+# If you have ground truth labels, evaluate accuracy (optional)
+accuracy = np.mean(test_predictions == test_labels)
+print(f'Test Accuracy: {accuracy * 100:.2f}%')
+
+# Print or save predictions
+print("Test Predictions:", test_predictions)
+# np.savetxt("test_predictions.csv", test_predictions, delimiter=",")
